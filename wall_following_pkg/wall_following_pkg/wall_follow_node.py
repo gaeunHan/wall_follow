@@ -53,99 +53,83 @@ class WallFollow(Node):
         self.leftDistLiDAR = 0.0
 
         # constants
-        self.pi = 3.14              # pi in radian
-        self.L_lookAhead = 1.5      # meters
-        self.throttle_max = 60      # fastest throttle
-        self.steering_max = 1       # rightest steering
-        self.LiDAR_detect_max = 10  # meters
+        self.L_lookAhead = 1.5          # meters
+        self.throttle_max = 60          # fastest throttle
+        self.steering_max = 1           # rightest steering
+        self.LiDAR_detect_max = 10      # meters
+        self.refDistToRightWall = 0.5   # meters
 
-
-    def get_range(self, range_data, angle):
+    def toRadian(self, degree):
         """
-        Simple helper to return the corresponding range measurement at a given angle. Make sure you take care of NaNs and infs.
-
-        Args:
-            range_data: single range array from the LiDAR
-            angle: between angle_min and angle_max of the LiDAR
-
-        Returns:
-            range: range measurement in meters at the given angle
-
+        Convert angle to radian from degree
         """
+        return float(math.pi * degree / 180.0)
 
-        span = angle
-    
-        #TODO: implement
-        return 0.0
 
-    def get_error(self, range_data, dist):
+    def get_range(self, angle):
         """
-        Calculates the error to the wall. Follow the wall to the left (going counter clockwise in the Levine loop). You potentially will need to use get_range()
+        Get range[] data to desired angle[rad]
+        """
+        msg = LaserScan()
+        idx = int((angle - msg.angle_min) / msg.angle_increment)
+        distance = msg.ranges[idx]
 
-        Args:
-            range_data: single range array from the LiDAR
-            dist: desired distance to the wall
+        # saturation
+        if(math.isinf(distance) or math.isnan(distance)):
+            distance = self.LiDAR_detect_max
 
-        Returns:
-            error: calculated error
+        return distance
+
+    def get_error(self):
+        """
+        Calculates the error to the wall. Follow the wall on the right
         """
 
-        #TODO:implement
-        return 0.0
+        a = self.get_range(self.toRadian(-55.0))
+        b = self.get_range(self.toRadian(-90.0))
+        theta = 90.0 - 55.0
+        alpha = math.atan((a * math.cos(theta) - b)/(a*math.sin(theta)))
+        currDistToRightWall = b*math.cos(alpha)
 
-    def pid_control(self, error, velocity):
+        currErr = self.refDistToRightWall - currDistToRightWall
+
+        # advanced
+        aheadDistToRightWall = currDistToRightWall + self.L_lookAhead * math.sin(alpha)
+
+        return currErr
+
+    def pid_control(self):
         """
         Based on the calculated error, publish vehicle control
-
-        Args:
-            error: calculated error
-            velocity: desired velocity
-
-        Returns:
-            None
         """
-        angle = 0.0
-        # TODO: Use kp, ki & kd to implement a PID controller
+
+        error = self.get_error()
+        self.integral = self.integral + error
+
+        # make a steering control input
+        angle = self.kp * error + self.kd * (error - self.prev_error) + self.ki * self.integral
+
+        self.prev_error = error 
+
+        # determine throttle speed depends on the amount of steering control input 
+        if angle >= abs(self.toRadian(0)) and angle < abs(self.toRadian(10)):
+            velocity = self.throttle_max
+        elif angle >= abs(self.toRadian(10)) and angle < abs(self.toRadian(20)):
+            velocity = self.throttle_max / 2
+        else:
+            velocity = self.throttle_max / 4
+
         drive_msg = AckermannDriveStamped()
-        # TODO: fill in drive message and publish
-        drive_msg.steering_angle = ??
-        drive_msg.speed = ??
+        drive_msg.steering_angle = angle
+        drive_msg.speed = velocity
         self.publisher.publish(drive_msg)
 
     def scan_callback(self, msg):
         """
         Callback function for LaserScan messages. Calculate the error and publish the drive message in this function.
-
-        Args:
-            msg: Incoming LaserScan message
-
-        Returns:
-            None
         """
 
-        frontAngle = 0.0
-        leftestAngle = self.pi/2
-        rightestAngle = -self.pi/2
-
-        frontIdx = self.get_range(frontAngle)
-        leftIdx = self.get_range(leftestAngle)
-        rightIdx = self.get_range(rightestAngle)
-        
-        self.frontDistLiDAR = msg.ranges[frontIdx]
-        self.leftDistLiDAR = msg.ranges[leftIdx]
-        self.rightDistLiDAR = msg.ranges[rightIdx]
-
-        # inf handling
-        if(math.isinf(self.frontDistLiDAR)):
-            self.frontDistLiDAR = self.LiDAR_detect_max
-        if(math.isinf(self.leftDistLiDAR)):
-            self.leftDistLiDAR = self.LiDAR_detect_max
-        if(math.isinf(self.rightDistLiDAR)):
-            self.rightDistLiDAR = self.LiDAR_detect_max
-
-        error = 0.0 # TODO: replace with error calculated by get_error()
-        velocity = 0.0 # TODO: calculate desired car velocity based on error
-        self.pid_control(error, velocity) # TODO: actuate the car with PID
+        self.pid_control() # actuate the car with PID
         
 
 def main(args=None):
