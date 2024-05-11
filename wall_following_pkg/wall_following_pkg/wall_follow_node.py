@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 from sensor_msgs.msg import LaserScan
-from ackermann_msgs.msg import AckermannDriveStamped
+#from ackermann_msgs.msg import AckermannDriveStamped
 
 class WallFollow(Node):
     """ 
@@ -25,7 +25,7 @@ class WallFollow(Node):
             10)
         self.subscriber # prevent unused variable warning
 
-
+        '''
         # create drive topic publisher
         self.publisher = self.create_publisher(
             AckermannDriveStamped, drive_topic, 10
@@ -33,6 +33,7 @@ class WallFollow(Node):
         timer_period = 0.5  # seconds
         self.timer = self.create_timer(timer_period, self.pid_control)
         self.publisher # prevent unused variable warning
+        '''
         
         # create serial object
         self.serial = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
@@ -66,11 +67,10 @@ class WallFollow(Node):
         return float(math.pi * degree / 180.0)
 
 
-    def get_range(self, angle):
+    def get_range(self, msg, angle):
         """
         Get range[] data to desired angle[rad]
         """
-        msg = LaserScan()
         idx = int((angle - msg.angle_min) / msg.angle_increment)
         distance = msg.ranges[idx]
 
@@ -80,14 +80,10 @@ class WallFollow(Node):
 
         return distance
 
-    def get_error(self):
+    def get_error(self, a, b, theta):
         """
         Calculates the error to the wall. Follow the wall on the right
         """
-
-        a = self.get_range(self.toRadian(-55.0))
-        b = self.get_range(self.toRadian(-90.0))
-        theta = 90.0 - 55.0
         alpha = math.atan((a * math.cos(theta) - b)/(a*math.sin(theta)))
         currDistToRightWall = b*math.cos(alpha)
 
@@ -98,7 +94,7 @@ class WallFollow(Node):
 
         return currErr
 
-    def pid_control(self):
+    def pid_control(self, error):
         """
         Based on the calculated error, publish vehicle control
         """
@@ -119,17 +115,36 @@ class WallFollow(Node):
         else:
             velocity = self.throttle_max / 4
 
+        '''
         drive_msg = AckermannDriveStamped()
         drive_msg.steering_angle = angle
         drive_msg.speed = velocity
         self.publisher.publish(drive_msg)
+        '''
+
+        return angle, velocity
+    
+    def send_control_to_car(self, steering, throttle):
+        self.ser.write(bytearray([throttle, steering])) # throttle, steering 값을 serial 통신을 통해 보냅니다.
+        self.get_logger().info('Sending: Throttle=%d, Steer=%d' % (throttle, steering)) # throttle, steering 값을 로그에 출력합니다.
 
     def scan_callback(self, msg):
         """
         Callback function for LaserScan messages. Calculate the error and publish the drive message in this function.
         """
+        a = self.get_range(self.toRadian(msg, -55.0))
+        b = self.get_range(self.toRadian(msg, -90.0))
+        theta = 90.0 - 55.0
 
-        self.pid_control() # actuate the car with PID
+        # calc dist error
+        error = self.get_error(a, b, theta)
+
+        # make control input
+        angle, velocity = self.pid_control(error) 
+
+        # drive the car 
+        self.send_control_to_car(angle, velocity)
+
         
 
 def main(args=None):
